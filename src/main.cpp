@@ -2,5 +2,7 @@
 git init
 git add .
 git commit -m "Initial commit"
-efeeeefeef
-esp_sleep_enable_ext0_wakeup
+ge 
+t remote add origin <repository_url>    
+Git push -u origin master
+g_flash_guard_default_ops
