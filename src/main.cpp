@@ -7,8 +7,8 @@
 // ------------------------------------------------------------
 
 // Reemplazar por el nombre y contraseña de tu red WiFi
-const char *ssid = "NOMBRE_DE_TU_WIFI";
-const char *password = "CONTRASENA_DE_TU_WIFI";
+const char *ssid = "Personal-985-2.4GHz";
+const char *password = "F7C0F5F985";
 
 // ------------------------------------------------------------
 // PINES
