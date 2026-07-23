@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
-
+#include <DHT.h>
 // ------------------------------------------------------------
 // CONFIGURACIÓN DE WIFI
 // ------------------------------------------------------------
@@ -11,28 +11,30 @@ const char *ssid = "Personal-985-2.4GHz";
 const char *password = "F7C0F5F985";
 
 // ------------------------------------------------------------
-// PINES
+// PINES Y SENSOR
 // ------------------------------------------------------------
 
-// Potenciómetro conectado al GPIO34
-const uint8_t PIN_POTENCIOMETRO = 34;
+#define DHTPIN 4
+#define DHTTYPE DHT22
 
-// LED conectado al GPIO2
 const uint8_t PIN_LED = 2;
 
-// ------------------------------------------------------------
-// VARIABLES DEL SISTEMA
-// ------------------------------------------------------------
+DHT dht(DHTPIN, DHTTYPE);
 
-int valorADC = 0;
+// ------------------------------------------------------------
+// VARIABLES
+// ------------------------------------------------------------
 
 float temperatura = 0.0;
+float humedad = 0.0;
 float temperaturaMaxima = 30.0;
 
-// Estado de la alarma
 bool alarmaActiva = false;
+bool sensorValido = false;
 
-// Servidor web en el puerto 80
+unsigned long tiempoUltimaLectura = 0;
+const unsigned long INTERVALO_LECTURA = 2000;
+
 WebServer servidor(80);
 
 // ------------------------------------------------------------
@@ -45,7 +47,6 @@ const char paginaWeb[] PROGMEM = R"rawliteral(
 
 <head>
     <meta charset="UTF-8">
-
     <meta
         name="viewport"
         content="width=device-width, initial-scale=1.0"
@@ -64,7 +65,7 @@ const char paginaWeb[] PROGMEM = R"rawliteral(
 
         .contenedor {
             max-width: 500px;
-            margin: 40px auto;
+            margin: 20px auto;
             padding: 20px;
         }
 
@@ -91,6 +92,12 @@ const char paginaWeb[] PROGMEM = R"rawliteral(
             margin: 20px 0;
         }
 
+        .humedad {
+            font-size: 28px;
+            color: #455a64;
+            margin: 15px 0;
+        }
+
         .normal {
             color: #2e7d32;
             font-size: 28px;
@@ -100,6 +107,12 @@ const char paginaWeb[] PROGMEM = R"rawliteral(
         .alarma {
             color: #c62828;
             font-size: 28px;
+            font-weight: bold;
+        }
+
+        .error {
+            color: #e65100;
+            font-size: 24px;
             font-weight: bold;
         }
 
@@ -142,15 +155,15 @@ const char paginaWeb[] PROGMEM = R"rawliteral(
 
         <div class="tarjeta">
 
-            <h2>Temperatura simulada</h2>
+            <h2>Temperatura actual</h2>
 
             <div class="temperatura">
-                <span id="temperatura">0.0</span> °C
+                <span id="temperatura">--.-</span> °C
             </div>
 
-            <div class="dato">
-                Valor ADC:
-                <span id="adc">0</span>
+            <div class="humedad">
+                Humedad:
+                <span id="humedad">--.-</span> %
             </div>
 
         </div>
@@ -159,15 +172,13 @@ const char paginaWeb[] PROGMEM = R"rawliteral(
 
             <h2>Configuración</h2>
 
-            <p>
-                Temperatura máxima permitida
-            </p>
+            <p>Temperatura máxima permitida</p>
 
             <input
                 type="number"
                 id="limite"
-                min="0"
-                max="100"
+                min="-20"
+                max="80"
                 step="0.1"
                 value="30"
             >
@@ -188,7 +199,7 @@ const char paginaWeb[] PROGMEM = R"rawliteral(
             <h2>Estado del sistema</h2>
 
             <div id="estado" class="normal">
-                NORMAL
+                ESPERANDO DATOS
             </div>
 
         </div>
@@ -200,38 +211,50 @@ const char paginaWeb[] PROGMEM = R"rawliteral(
         function actualizarDatos()
         {
             fetch("/datos")
-
-            .then(respuesta => respuesta.json())
-
-            .then(datos =>
-            {
-                document.getElementById("temperatura").innerText =
-                    datos.temperatura.toFixed(1);
-
-                document.getElementById("adc").innerText =
-                    datos.adc;
-
-                document.getElementById("limiteActual").innerText =
-                    datos.limite.toFixed(1);
-
-                const estado = document.getElementById("estado");
-
-                if (datos.alarma)
+                .then(respuesta => respuesta.json())
+                .then(datos =>
                 {
-                    estado.innerText = "TEMPERATURA ALTA";
-                    estado.className = "alarma";
-                }
-                else
-                {
-                    estado.innerText = "NORMAL";
-                    estado.className = "normal";
-                }
-            })
+                    document.getElementById("limiteActual").innerText =
+                        datos.limite.toFixed(1);
 
-            .catch(error =>
-            {
-                console.log("Error:", error);
-            });
+                    const estado =
+                        document.getElementById("estado");
+
+                    if (!datos.sensorValido)
+                    {
+                        document.getElementById("temperatura").innerText =
+                            "--.-";
+
+                        document.getElementById("humedad").innerText =
+                            "--.-";
+
+                        estado.innerText = "ERROR DE SENSOR";
+                        estado.className = "error";
+
+                        return;
+                    }
+
+                    document.getElementById("temperatura").innerText =
+                        datos.temperatura.toFixed(1);
+
+                    document.getElementById("humedad").innerText =
+                        datos.humedad.toFixed(1);
+
+                    if (datos.alarma)
+                    {
+                        estado.innerText = "TEMPERATURA ALTA";
+                        estado.className = "alarma";
+                    }
+                    else
+                    {
+                        estado.innerText = "NORMAL";
+                        estado.className = "normal";
+                    }
+                })
+                .catch(error =>
+                {
+                    console.log("Error:", error);
+                });
         }
 
         function guardarLimite()
@@ -240,17 +263,15 @@ const char paginaWeb[] PROGMEM = R"rawliteral(
                 document.getElementById("limite").value;
 
             fetch("/configurar?limite=" + limite)
-
-            .then(respuesta => respuesta.text())
-
-            .then(mensaje =>
-            {
-                alert(mensaje);
-                actualizarDatos();
-            });
+                .then(respuesta => respuesta.text())
+                .then(mensaje =>
+                {
+                    alert(mensaje);
+                    actualizarDatos();
+                });
         }
 
-        setInterval(actualizarDatos, 1000);
+        setInterval(actualizarDatos, 2000);
 
         actualizarDatos();
 
@@ -262,41 +283,65 @@ const char paginaWeb[] PROGMEM = R"rawliteral(
 )rawliteral";
 
 // ------------------------------------------------------------
-// LECTURA DEL POTENCIÓMETRO
+// LECTURA DEL DHT22
 // ------------------------------------------------------------
 
-void leerTemperatura()
+void leerSensor()
 {
-    valorADC = analogRead(PIN_POTENCIOMETRO);
+    unsigned long tiempoActual = millis();
 
-    /*
-     * El ADC entrega valores entre 0 y 4095.
-     *
-     * Se simula una temperatura entre:
-     *
-     * 0    ADC = 0 °C
-     * 4095 ADC = 100 °C
-     */
+    if (tiempoActual - tiempoUltimaLectura < INTERVALO_LECTURA)
+    {
+        return;
+    }
 
-    temperatura = valorADC * 100.0 / 4095.0;
+    tiempoUltimaLectura = tiempoActual;
+
+    float nuevaTemperatura = dht.readTemperature();
+    float nuevaHumedad = dht.readHumidity();
+
+    if (isnan(nuevaTemperatura) || isnan(nuevaHumedad))
+    {
+        sensorValido = false;
+
+        Serial.println("Error al leer el DHT22");
+
+        return;
+    }
+
+    temperatura = nuevaTemperatura;
+    humedad = nuevaHumedad;
+    sensorValido = true;
+
+    Serial.print("Temperatura: ");
+    Serial.print(temperatura, 1);
+    Serial.print(" °C | Humedad: ");
+    Serial.print(humedad, 1);
+    Serial.println(" %");
 }
 
 // ------------------------------------------------------------
-// CONTROL DE LA SALIDA
+// CONTROL DE ALARMA
 // ------------------------------------------------------------
 
 void controlarAlarma()
 {
+    if (!sensorValido)
+    {
+        alarmaActiva = false;
+        digitalWrite(PIN_LED, LOW);
+
+        return;
+    }
+
     if (temperatura >= temperaturaMaxima)
     {
         alarmaActiva = true;
-
         digitalWrite(PIN_LED, HIGH);
     }
     else
     {
         alarmaActiva = false;
-
         digitalWrite(PIN_LED, LOW);
     }
 }
@@ -315,7 +360,7 @@ void manejarPaginaPrincipal()
 }
 
 // ------------------------------------------------------------
-// RUTA PARA ENVIAR DATOS A LA PÁGINA
+// ENVÍO DE DATOS
 // ------------------------------------------------------------
 
 void manejarDatos()
@@ -327,8 +372,8 @@ void manejarDatos()
 
     json += ",";
 
-    json += "\"adc\":";
-    json += String(valorADC);
+    json += "\"humedad\":";
+    json += String(humedad, 1);
 
     json += ",";
 
@@ -340,6 +385,11 @@ void manejarDatos()
     json += "\"alarma\":";
     json += alarmaActiva ? "true" : "false";
 
+    json += ",";
+
+    json += "\"sensorValido\":";
+    json += sensorValido ? "true" : "false";
+
     json += "}";
 
     servidor.send(
@@ -350,7 +400,7 @@ void manejarDatos()
 }
 
 // ------------------------------------------------------------
-// RUTA PARA RECIBIR EL NUEVO LÍMITE
+// CAMBIO DEL LÍMITE DESDE LA WEB
 // ------------------------------------------------------------
 
 void manejarConfiguracion()
@@ -369,12 +419,12 @@ void manejarConfiguracion()
     float nuevoLimite =
         servidor.arg("limite").toFloat();
 
-    if (nuevoLimite < 0.0 || nuevoLimite > 100.0)
+    if (nuevoLimite < -20.0 || nuevoLimite > 80.0)
     {
         servidor.send(
             400,
             "text/plain",
-            "El límite debe estar entre 0 y 100 °C"
+            "El límite debe estar entre -20 y 80 °C"
         );
 
         return;
@@ -383,7 +433,7 @@ void manejarConfiguracion()
     temperaturaMaxima = nuevoLimite;
 
     Serial.print("Nuevo límite: ");
-    Serial.print(temperaturaMaxima);
+    Serial.print(temperaturaMaxima, 1);
     Serial.println(" °C");
 
     servidor.send(
@@ -417,11 +467,7 @@ void conectarWiFi()
     Serial.println(ssid);
 
     WiFi.mode(WIFI_STA);
-
-    WiFi.begin(
-        ssid,
-        password
-    );
+    WiFi.begin(ssid, password);
 
     uint8_t intentos = 0;
 
@@ -431,9 +477,7 @@ void conectarWiFi()
     )
     {
         delay(500);
-
         Serial.print(".");
-
         intentos++;
     }
 
@@ -454,7 +498,7 @@ void conectarWiFi()
 }
 
 // ------------------------------------------------------------
-// CONFIGURACIÓN INICIAL
+// SETUP
 // ------------------------------------------------------------
 
 void setup()
@@ -463,29 +507,10 @@ void setup()
 
     delay(1000);
 
-    pinMode(
-        PIN_POTENCIOMETRO,
-        INPUT
-    );
+    pinMode(PIN_LED, OUTPUT);
+    digitalWrite(PIN_LED, LOW);
 
-    pinMode(
-        PIN_LED,
-        OUTPUT
-    );
-
-    digitalWrite(
-        PIN_LED,
-        LOW
-    );
-
-    /*
-     * Se configura el ADC del ESP32 con resolución de 12 bits.
-     *
-     * Valores posibles:
-     * 0 a 4095
-     */
-
-    analogReadResolution(12);
+    dht.begin();
 
     conectarWiFi();
 
@@ -517,15 +542,13 @@ void setup()
 }
 
 // ------------------------------------------------------------
-// BUCLE PRINCIPAL
+// LOOP
 // ------------------------------------------------------------
 
 void loop()
 {
-    leerTemperatura();
-
+    leerSensor();
     controlarAlarma();
-
     servidor.handleClient();
 
     delay(10);
