@@ -10,20 +10,48 @@
 const char *ssid = "Personal-985-2.4GHz";
 const char *password = "F7C0F5F985";
 
-// ------------------------------------------------------------
-// PINES Y SENSOR
-// ------------------------------------------------------------
+// ============================================================
+// CONFIGURACIÓN MQTT
+// ============================================================
 
-#define DHTPIN 4
-#define DHTTYPE DHT22
+// Colocar la dirección IPv4 de la computadora donde funciona Mosquitto.
+// Para verla, ejecutar ipconfig en PowerShell.
+const char* MQTT_BROKER = "192.168.1.35";
 
-const uint8_t PIN_LED = 2;
+const uint16_t MQTT_PORT = 1883;
 
-DHT dht(DHTPIN, DHTTYPE);
+// Tópicos MQTT
+const char* TOPIC_TEMPERATURA = "proyecto/temperatura";
+const char* TOPIC_HUMEDAD     = "proyecto/humedad";
+const char* TOPIC_LIMITE      = "proyecto/limite";
+const char* TOPIC_ALARMA      = "proyecto/alarma";
+const char* TOPIC_ESTADO      = "proyecto/estado";
 
-// ------------------------------------------------------------
-// VARIABLES
-// ------------------------------------------------------------
+// ============================================================
+// CONFIGURACIÓN DEL SENSOR
+// ============================================================
+
+#define DHT_PIN  4
+#define DHT_TYPE DHT22
+
+DHT dht(DHT_PIN, DHT_TYPE);
+
+// ============================================================
+// CONFIGURACIÓN DE SALIDAS
+// ============================================================
+
+const uint8_t LED_ALARMA = 2;
+
+// ============================================================
+// OBJETOS WIFI Y MQTT
+// ============================================================
+
+WiFiClient wifiClient;
+PubSubClient mqttClient(wifiClient);
+
+// ============================================================
+// VARIABLES DEL SISTEMA
+// ============================================================
 
 float temperatura = 0.0;
 float humedad = 0.0;
@@ -32,265 +60,193 @@ float temperaturaMaxima = 30.0;
 bool alarmaActiva = false;
 bool sensorValido = false;
 
-unsigned long tiempoUltimaLectura = 0;
+// Tiempo entre lecturas del DHT22
 const unsigned long INTERVALO_LECTURA = 2000;
+unsigned long tiempoUltimaLectura = 0;
 
-WebServer servidor(80);
+// Tiempo entre intentos de reconexión MQTT
+const unsigned long INTERVALO_RECONEXION = 3000;
+unsigned long tiempoUltimoIntentoMQTT = 0;
 
-// ------------------------------------------------------------
-// PÁGINA WEB
-// ------------------------------------------------------------
+// ============================================================
+// CONEXIÓN WIFI
+// ============================================================
 
-const char paginaWeb[] PROGMEM = R"rawliteral(
-<!DOCTYPE html>
-<html lang="es">
+void conectarWiFi()
+{
+    Serial.println();
+    Serial.print("Conectando al WiFi: ");
+    Serial.println(WIFI_SSID);
 
-<head>
-    <meta charset="UTF-8">
-    <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1.0"
-    >
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
-    <title>Control de temperatura</title>
+    while (WiFi.status() != WL_CONNECTED)
+    {
+        delay(500);
+        Serial.print(".");
+    }
 
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background-color: #eef2f7;
-            margin: 0;
-            padding: 0;
-            text-align: center;
-        }
+    Serial.println();
+    Serial.println("WiFi conectado correctamente");
 
-        .contenedor {
-            max-width: 500px;
-            margin: 20px auto;
-            padding: 20px;
-        }
+    Serial.print("IP del ESP32: ");
+    Serial.println(WiFi.localIP());
 
-        .tarjeta {
-            background-color: white;
-            border-radius: 15px;
-            padding: 25px;
-            margin-bottom: 20px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-        }
+    Serial.print("IP del broker MQTT: ");
+    Serial.println(MQTT_BROKER);
+}
 
-        h1 {
-            color: #263238;
-        }
+// ============================================================
+// RECEPCIÓN DE MENSAJES MQTT
+// ============================================================
 
-        h2 {
-            color: #455a64;
-        }
+void recibirMensajeMQTT(
+    char* topic,
+    byte* payload,
+    unsigned int length
+)
+{
+    String mensaje = "";
 
-        .temperatura {
-            font-size: 55px;
-            font-weight: bold;
-            color: #1565c0;
-            margin: 20px 0;
-        }
+    for (unsigned int i = 0; i < length; i++)
+    {
+        mensaje += static_cast<char>(payload[i]);
+    }
 
-        .humedad {
-            font-size: 28px;
-            color: #455a64;
-            margin: 15px 0;
-        }
+    mensaje.trim();
 
-        .normal {
-            color: #2e7d32;
-            font-size: 28px;
-            font-weight: bold;
-        }
+    Serial.println();
+    Serial.print("Mensaje MQTT recibido en ");
+    Serial.print(topic);
+    Serial.print(": ");
+    Serial.println(mensaje);
 
-        .alarma {
-            color: #c62828;
-            font-size: 28px;
-            font-weight: bold;
-        }
+    // Recibir el límite enviado desde Node-RED
+    if (String(topic) == TOPIC_LIMITE)
+    {
+        float nuevoLimite = mensaje.toFloat();
 
-        .error {
-            color: #e65100;
-            font-size: 24px;
-            font-weight: bold;
-        }
-
-        input {
-            width: 120px;
-            padding: 10px;
-            font-size: 18px;
-            text-align: center;
-            border: 1px solid #999;
-            border-radius: 6px;
-        }
-
-        button {
-            padding: 11px 20px;
-            margin-left: 8px;
-            font-size: 17px;
-            border: none;
-            border-radius: 6px;
-            background-color: #1565c0;
-            color: white;
-            cursor: pointer;
-        }
-
-        button:hover {
-            background-color: #0d47a1;
-        }
-
-        .dato {
-            font-size: 18px;
-            margin: 10px;
-        }
-    </style>
-</head>
-
-<body>
-
-    <div class="contenedor">
-
-        <h1>Control de temperatura</h1>
-
-        <div class="tarjeta">
-
-            <h2>Temperatura actual</h2>
-
-            <div class="temperatura">
-                <span id="temperatura">--.-</span> °C
-            </div>
-
-            <div class="humedad">
-                Humedad:
-                <span id="humedad">--.-</span> %
-            </div>
-
-        </div>
-
-        <div class="tarjeta">
-
-            <h2>Configuración</h2>
-
-            <p>Temperatura máxima permitida</p>
-
-            <input
-                type="number"
-                id="limite"
-                min="-20"
-                max="80"
-                step="0.1"
-                value="30"
-            >
-
-            <button onclick="guardarLimite()">
-                Guardar
-            </button>
-
-            <p class="dato">
-                Límite actual:
-                <span id="limiteActual">30.0</span> °C
-            </p>
-
-        </div>
-
-        <div class="tarjeta">
-
-            <h2>Estado del sistema</h2>
-
-            <div id="estado" class="normal">
-                ESPERANDO DATOS
-            </div>
-
-        </div>
-
-    </div>
-
-    <script>
-
-        function actualizarDatos()
+        if (nuevoLimite >= -20.0 && nuevoLimite <= 80.0)
         {
-            fetch("/datos")
-                .then(respuesta => respuesta.json())
-                .then(datos =>
-                {
-                    document.getElementById("limiteActual").innerText =
-                        datos.limite.toFixed(1);
+            temperaturaMaxima = nuevoLimite;
 
-                    const estado =
-                        document.getElementById("estado");
-
-                    if (!datos.sensorValido)
-                    {
-                        document.getElementById("temperatura").innerText =
-                            "--.-";
-
-                        document.getElementById("humedad").innerText =
-                            "--.-";
-
-                        estado.innerText = "ERROR DE SENSOR";
-                        estado.className = "error";
-
-                        return;
-                    }
-
-                    document.getElementById("temperatura").innerText =
-                        datos.temperatura.toFixed(1);
-
-                    document.getElementById("humedad").innerText =
-                        datos.humedad.toFixed(1);
-
-                    if (datos.alarma)
-                    {
-                        estado.innerText = "TEMPERATURA ALTA";
-                        estado.className = "alarma";
-                    }
-                    else
-                    {
-                        estado.innerText = "NORMAL";
-                        estado.className = "normal";
-                    }
-                })
-                .catch(error =>
-                {
-                    console.log("Error:", error);
-                });
+            Serial.print("Nuevo límite de temperatura: ");
+            Serial.print(temperaturaMaxima, 1);
+            Serial.println(" °C");
         }
-
-        function guardarLimite()
+        else
         {
-            const limite =
-                document.getElementById("limite").value;
-
-            fetch("/configurar?limite=" + limite)
-                .then(respuesta => respuesta.text())
-                .then(mensaje =>
-                {
-                    alert(mensaje);
-                    actualizarDatos();
-                });
+            Serial.println("Error: límite fuera de rango");
         }
+    }
+}
 
-        setInterval(actualizarDatos, 2000);
+// ============================================================
+// CONEXIÓN MQTT
+// ============================================================
 
-        actualizarDatos();
+bool conectarMQTT()
+{
+    Serial.print("Conectando con Mosquitto en ");
+    Serial.print(MQTT_BROKER);
+    Serial.print(":");
+    Serial.print(MQTT_PORT);
+    Serial.print("... ");
 
-    </script>
+    String identificador = "ESP32-DHT22-";
+    identificador += String(
+        static_cast<uint32_t>(ESP.getEfuseMac()),
+        HEX
+    );
 
-</body>
+    /*
+     * Última voluntad MQTT:
+     * Si el ESP32 pierde conexión inesperadamente,
+     * el broker publica "desconectado".
+     */
+    bool conectado = mqttClient.connect(
+        identificador.c_str(),
+        TOPIC_ESTADO,
+        0,
+        true,
+        "desconectado"
+    );
 
-</html>
-)rawliteral";
+    if (conectado)
+    {
+        Serial.println("conectado");
 
-// ------------------------------------------------------------
+        // Suscripción para recibir el límite desde Node-RED
+        mqttClient.subscribe(TOPIC_LIMITE);
+
+        // Publicar estado de conexión
+        mqttClient.publish(
+            TOPIC_ESTADO,
+            "conectado",
+            true
+        );
+
+        // Publicar el límite actual
+        char textoLimite[16];
+
+        snprintf(
+            textoLimite,
+            sizeof(textoLimite),
+            "%.1f",
+            temperaturaMaxima
+        );
+
+        mqttClient.publish(
+            TOPIC_LIMITE,
+            textoLimite,
+            true
+        );
+
+        return true;
+    }
+
+    Serial.print("falló. Código de error: ");
+    Serial.println(mqttClient.state());
+
+    return false;
+}
+
+// ============================================================
+// RECONEXIÓN MQTT NO BLOQUEANTE
+// ============================================================
+
+void controlarConexionMQTT()
+{
+    if (mqttClient.connected())
+    {
+        return;
+    }
+
+    unsigned long tiempoActual = millis();
+
+    if (
+        tiempoActual - tiempoUltimoIntentoMQTT
+        >= INTERVALO_RECONEXION
+    )
+    {
+        tiempoUltimoIntentoMQTT = tiempoActual;
+        conectarMQTT();
+    }
+}
+
+// ============================================================
 // LECTURA DEL DHT22
-// ------------------------------------------------------------
+// ============================================================
 
 void leerSensor()
 {
     unsigned long tiempoActual = millis();
 
-    if (tiempoActual - tiempoUltimaLectura < INTERVALO_LECTURA)
+    if (
+        tiempoActual - tiempoUltimaLectura
+        < INTERVALO_LECTURA
+    )
     {
         return;
     }
@@ -300,11 +256,14 @@ void leerSensor()
     float nuevaTemperatura = dht.readTemperature();
     float nuevaHumedad = dht.readHumidity();
 
-    if (isnan(nuevaTemperatura) || isnan(nuevaHumedad))
+    if (
+        isnan(nuevaTemperatura) ||
+        isnan(nuevaHumedad)
+    )
     {
         sensorValido = false;
 
-        Serial.println("Error al leer el DHT22");
+        Serial.println("Error al leer el sensor DHT22");
 
         return;
     }
@@ -313,193 +272,150 @@ void leerSensor()
     humedad = nuevaHumedad;
     sensorValido = true;
 
+    Serial.println();
     Serial.print("Temperatura: ");
     Serial.print(temperatura, 1);
-    Serial.print(" °C | Humedad: ");
+    Serial.println(" °C");
+
+    Serial.print("Humedad: ");
     Serial.print(humedad, 1);
     Serial.println(" %");
+
+    Serial.print("Límite: ");
+    Serial.print(temperaturaMaxima, 1);
+    Serial.println(" °C");
 }
 
-// ------------------------------------------------------------
-// CONTROL DE ALARMA
-// ------------------------------------------------------------
+// ============================================================
+// CONTROL DE LA ALARMA
+// ============================================================
 
 void controlarAlarma()
 {
     if (!sensorValido)
     {
         alarmaActiva = false;
-        digitalWrite(PIN_LED, LOW);
+        digitalWrite(LED_ALARMA, LOW);
 
         return;
     }
 
-    if (temperatura >= temperaturaMaxima)
-    {
-        alarmaActiva = true;
-        digitalWrite(PIN_LED, HIGH);
-    }
-    else
-    {
-        alarmaActiva = false;
-        digitalWrite(PIN_LED, LOW);
-    }
-}
+    alarmaActiva = temperatura >= temperaturaMaxima;
 
-// ------------------------------------------------------------
-// RUTA PRINCIPAL
-// ------------------------------------------------------------
-
-void manejarPaginaPrincipal()
-{
-    servidor.send_P(
-        200,
-        "text/html",
-        paginaWeb
+    digitalWrite(
+        LED_ALARMA,
+        alarmaActiva ? HIGH : LOW
     );
 }
 
-// ------------------------------------------------------------
-// ENVÍO DE DATOS
-// ------------------------------------------------------------
+// ============================================================
+// PUBLICACIÓN MQTT
+// ============================================================
 
-void manejarDatos()
+void publicarDatosMQTT()
 {
-    String json = "{";
+    static unsigned long ultimaPublicacion = 0;
 
-    json += "\"temperatura\":";
-    json += String(temperatura, 1);
+    unsigned long tiempoActual = millis();
 
-    json += ",";
-
-    json += "\"humedad\":";
-    json += String(humedad, 1);
-
-    json += ",";
-
-    json += "\"limite\":";
-    json += String(temperaturaMaxima, 1);
-
-    json += ",";
-
-    json += "\"alarma\":";
-    json += alarmaActiva ? "true" : "false";
-
-    json += ",";
-
-    json += "\"sensorValido\":";
-    json += sensorValido ? "true" : "false";
-
-    json += "}";
-
-    servidor.send(
-        200,
-        "application/json",
-        json
-    );
-}
-
-// ------------------------------------------------------------
-// CAMBIO DEL LÍMITE DESDE LA WEB
-// ------------------------------------------------------------
-
-void manejarConfiguracion()
-{
-    if (!servidor.hasArg("limite"))
-    {
-        servidor.send(
-            400,
-            "text/plain",
-            "Falta el valor del límite"
-        );
-
-        return;
-    }
-
-    float nuevoLimite =
-        servidor.arg("limite").toFloat();
-
-    if (nuevoLimite < -20.0 || nuevoLimite > 80.0)
-    {
-        servidor.send(
-            400,
-            "text/plain",
-            "El límite debe estar entre -20 y 80 °C"
-        );
-
-        return;
-    }
-
-    temperaturaMaxima = nuevoLimite;
-
-    Serial.print("Nuevo límite: ");
-    Serial.print(temperaturaMaxima, 1);
-    Serial.println(" °C");
-
-    servidor.send(
-        200,
-        "text/plain",
-        "Límite actualizado correctamente"
-    );
-}
-
-// ------------------------------------------------------------
-// RUTA NO ENCONTRADA
-// ------------------------------------------------------------
-
-void manejarRutaNoEncontrada()
-{
-    servidor.send(
-        404,
-        "text/plain",
-        "Página no encontrada"
-    );
-}
-
-// ------------------------------------------------------------
-// CONEXIÓN WIFI
-// ------------------------------------------------------------
-
-void conectarWiFi()
-{
-    Serial.println();
-    Serial.print("Conectando a ");
-    Serial.println(ssid);
-
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(ssid, password);
-
-    uint8_t intentos = 0;
-
-    while (
-        WiFi.status() != WL_CONNECTED &&
-        intentos < 30
+    if (
+        tiempoActual - ultimaPublicacion
+        < INTERVALO_LECTURA
     )
     {
-        delay(500);
-        Serial.print(".");
-        intentos++;
+        return;
     }
 
-    Serial.println();
+    ultimaPublicacion = tiempoActual;
 
-    if (WiFi.status() == WL_CONNECTED)
+    if (!mqttClient.connected())
     {
-        Serial.println("WiFi conectado correctamente");
+        return;
+    }
 
-        Serial.print("Dirección IP: ");
-        Serial.println(WiFi.localIP());
+    if (!sensorValido)
+    {
+        mqttClient.publish(
+            TOPIC_ESTADO,
+            "error_sensor",
+            true
+        );
+
+        return;
+    }
+
+    char textoTemperatura[16];
+    char textoHumedad[16];
+    char textoLimite[16];
+
+    snprintf(
+        textoTemperatura,
+        sizeof(textoTemperatura),
+        "%.1f",
+        temperatura
+    );
+
+    snprintf(
+        textoHumedad,
+        sizeof(textoHumedad),
+        "%.1f",
+        humedad
+    );
+
+    snprintf(
+        textoLimite,
+        sizeof(textoLimite),
+        "%.1f",
+        temperaturaMaxima
+    );
+
+    mqttClient.publish(
+        TOPIC_TEMPERATURA,
+        textoTemperatura,
+        true
+    );
+
+    mqttClient.publish(
+        TOPIC_HUMEDAD,
+        textoHumedad,
+        true
+    );
+
+    mqttClient.publish(
+        TOPIC_LIMITE,
+        textoLimite,
+        true
+    );
+
+    mqttClient.publish(
+        TOPIC_ALARMA,
+        alarmaActiva ? "1" : "0",
+        true
+    );
+
+    mqttClient.publish(
+        TOPIC_ESTADO,
+        "conectado",
+        true
+    );
+
+    Serial.println("Datos publicados en MQTT");
+
+    Serial.print("Estado de alarma: ");
+
+    if (alarmaActiva)
+    {
+        Serial.println("ACTIVA");
     }
     else
     {
-        Serial.println("No se pudo conectar al WiFi");
-        Serial.println("Revisar nombre y contraseña");
+        Serial.println("NORMAL");
     }
 }
 
-// ------------------------------------------------------------
+// ============================================================
 // SETUP
-// ------------------------------------------------------------
+// ============================================================
 
 void setup()
 {
@@ -507,49 +423,52 @@ void setup()
 
     delay(1000);
 
-    pinMode(PIN_LED, OUTPUT);
-    digitalWrite(PIN_LED, LOW);
+    pinMode(LED_ALARMA, OUTPUT);
+    digitalWrite(LED_ALARMA, LOW);
 
     dht.begin();
 
     conectarWiFi();
 
-    servidor.on(
-        "/",
-        HTTP_GET,
-        manejarPaginaPrincipal
+    mqttClient.setServer(
+        MQTT_BROKER,
+        MQTT_PORT
     );
 
-    servidor.on(
-        "/datos",
-        HTTP_GET,
-        manejarDatos
+    mqttClient.setCallback(
+        recibirMensajeMQTT
     );
 
-    servidor.on(
-        "/configurar",
-        HTTP_GET,
-        manejarConfiguracion
-    );
+    mqttClient.setKeepAlive(30);
+    mqttClient.setSocketTimeout(5);
 
-    servidor.onNotFound(
-        manejarRutaNoEncontrada
-    );
+    conectarMQTT();
 
-    servidor.begin();
-
-    Serial.println("Servidor web iniciado");
+    Serial.println();
+    Serial.println("Sistema iniciado");
 }
 
-// ------------------------------------------------------------
+// ============================================================
 // LOOP
-// ------------------------------------------------------------
+// ============================================================
 
 void loop()
 {
+    if (WiFi.status() != WL_CONNECTED)
+    {
+        conectarWiFi();
+    }
+
+    controlarConexionMQTT();
+
+    if (mqttClient.connected())
+    {
+        mqttClient.loop();
+    }
+
     leerSensor();
     controlarAlarma();
-    servidor.handleClient();
+    publicarDatosMQTT();
 
     delay(10);
 }
