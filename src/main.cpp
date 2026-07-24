@@ -15,10 +15,8 @@ const char *WIFI_PASSWORD = "F7C0F5F985";
 // CONFIGURACIÓN MQTT
 // ============================================================
 
-// Colocar la dirección IPv4 de la computadora donde funciona Mosquitto.
-// Para verla, ejecutar ipconfig en PowerShell.
+// Dirección IPv4 de la computadora donde funciona Mosquitto
 const char* MQTT_BROKER = "192.168.0.145";
-
 const uint16_t MQTT_PORT = 1883;
 
 // Tópicos MQTT
@@ -29,7 +27,7 @@ const char* TOPIC_ALARMA      = "proyecto/alarma";
 const char* TOPIC_ESTADO      = "proyecto/estado";
 
 // ============================================================
-// CONFIGURACIÓN DEL SENSOR
+// CONFIGURACIÓN DEL SENSOR DHT22
 // ============================================================
 
 #define DHT_PIN  4
@@ -56,6 +54,8 @@ PubSubClient mqttClient(wifiClient);
 
 float temperatura = 0.0;
 float humedad = 0.0;
+
+// Límite inicial de temperatura
 float temperaturaMaxima = 30.0;
 
 bool alarmaActiva = false;
@@ -64,6 +64,10 @@ bool sensorValido = false;
 // Tiempo entre lecturas del DHT22
 const unsigned long INTERVALO_LECTURA = 2000;
 unsigned long tiempoUltimaLectura = 0;
+
+// Tiempo entre publicaciones MQTT
+const unsigned long INTERVALO_PUBLICACION = 2000;
+unsigned long tiempoUltimaPublicacion = 0;
 
 // Tiempo entre intentos de reconexión MQTT
 const unsigned long INTERVALO_RECONEXION = 3000;
@@ -155,7 +159,9 @@ bool conectarMQTT()
     Serial.print(MQTT_PORT);
     Serial.print("... ");
 
+    // Identificador único para este ESP32
     String identificador = "ESP32-DHT22-";
+
     identificador += String(
         static_cast<uint32_t>(ESP.getEfuseMac()),
         HEX
@@ -163,8 +169,8 @@ bool conectarMQTT()
 
     /*
      * Última voluntad MQTT:
-     * Si el ESP32 pierde conexión inesperadamente,
-     * el broker publica "desconectado".
+     * si el ESP32 pierde conexión inesperadamente,
+     * Mosquitto publica "desconectado".
      */
     bool conectado = mqttClient.connect(
         identificador.c_str(),
@@ -178,29 +184,13 @@ bool conectarMQTT()
     {
         Serial.println("conectado");
 
-        // Suscripción para recibir el límite desde Node-RED
+        // Escuchar cambios del límite desde Node-RED
         mqttClient.subscribe(TOPIC_LIMITE);
 
-        // Publicar estado de conexión
+        // Publicar estado actual
         mqttClient.publish(
             TOPIC_ESTADO,
             "conectado",
-            true
-        );
-
-        // Publicar el límite actual
-        char textoLimite[16];
-
-        snprintf(
-            textoLimite,
-            sizeof(textoLimite),
-            "%.1f",
-            temperaturaMaxima
-        );
-
-        mqttClient.publish(
-            TOPIC_LIMITE,
-            textoLimite,
             true
         );
 
@@ -214,7 +204,7 @@ bool conectarMQTT()
 }
 
 // ============================================================
-// RECONEXIÓN MQTT NO BLOQUEANTE
+// CONTROL DE CONEXIÓN MQTT
 // ============================================================
 
 void controlarConexionMQTT()
@@ -237,7 +227,7 @@ void controlarConexionMQTT()
 }
 
 // ============================================================
-// LECTURA DEL DHT22
+// LECTURA DEL SENSOR DHT22
 // ============================================================
 
 void leerSensor()
@@ -254,27 +244,30 @@ void leerSensor()
 
     tiempoUltimaLectura = tiempoActual;
 
-    float temperatura = dht.readTemperature();
-float humedad = dht.readHumidity();
+    // Las lecturas se guardan en las variables globales
+    temperatura = dht.readTemperature();
+    humedad = dht.readHumidity();
 
-if (!isnan(temperatura) && !isnan(humedad))
-{
-    String tempTexto = String(temperatura, 1);
-    String humTexto = String(humedad, 1);
+    if (!isnan(temperatura) && !isnan(humedad))
+    {
+        sensorValido = true;
 
-    client.publish("proyecto/temperatura", tempTexto.c_str());
-    client.publish("proyecto/humedad", humTexto.c_str());
+        Serial.println();
+        Serial.print("Temperatura: ");
+        Serial.print(temperatura, 1);
+        Serial.print(" °C | Humedad: ");
+        Serial.print(humedad, 1);
+        Serial.println(" %");
+    }
+    else
+    {
+        sensorValido = false;
 
-    Serial.print("Temperatura: ");
-    Serial.print(temperatura);
-    Serial.print(" °C | Humedad: ");
-    Serial.print(humedad);
-    Serial.println(" %");
+        Serial.println();
+        Serial.println("Error al leer el DHT22");
+    }
 }
-else
-{
-    Serial.println("Error al leer el DHT22");
-}
+
 // ============================================================
 // CONTROL DE LA ALARMA
 // ============================================================
@@ -289,33 +282,36 @@ void controlarAlarma()
         return;
     }
 
+    // La alarma se activa si la temperatura alcanza o supera el límite
     alarmaActiva = temperatura >= temperaturaMaxima;
 
-    digitalWrite(
-        LED_ALARMA,
-        alarmaActiva ? HIGH : LOW
-    );
+    if (alarmaActiva)
+    {
+        digitalWrite(LED_ALARMA, HIGH);
+    }
+    else
+    {
+        digitalWrite(LED_ALARMA, LOW);
+    }
 }
 
 // ============================================================
-// PUBLICACIÓN MQTT
+// PUBLICACIÓN DE DATOS POR MQTT
 // ============================================================
 
 void publicarDatosMQTT()
 {
-    static unsigned long ultimaPublicacion = 0;
-
     unsigned long tiempoActual = millis();
 
     if (
-        tiempoActual - ultimaPublicacion
-        < INTERVALO_LECTURA
+        tiempoActual - tiempoUltimaPublicacion
+        < INTERVALO_PUBLICACION
     )
     {
         return;
     }
 
-    ultimaPublicacion = tiempoActual;
+    tiempoUltimaPublicacion = tiempoActual;
 
     if (!mqttClient.connected())
     {
@@ -358,30 +354,35 @@ void publicarDatosMQTT()
         temperaturaMaxima
     );
 
+    // Publicar temperatura
     mqttClient.publish(
         TOPIC_TEMPERATURA,
         textoTemperatura,
         true
     );
 
+    // Publicar humedad
     mqttClient.publish(
         TOPIC_HUMEDAD,
         textoHumedad,
         true
     );
 
+    // Publicar límite configurado
     mqttClient.publish(
         TOPIC_LIMITE,
         textoLimite,
         true
     );
 
+    // Publicar estado de alarma
     mqttClient.publish(
         TOPIC_ALARMA,
         alarmaActiva ? "1" : "0",
         true
     );
 
+    // Publicar estado del ESP32
     mqttClient.publish(
         TOPIC_ESTADO,
         "conectado",
@@ -438,18 +439,21 @@ void setup()
 }
 
 // ============================================================
-// LOOP
+// LOOP PRINCIPAL
 // ============================================================
 
 void loop()
 {
+    // Reconectar WiFi si se pierde la conexión
     if (WiFi.status() != WL_CONNECTED)
     {
         conectarWiFi();
     }
 
+    // Reconectar MQTT si se pierde la conexión
     controlarConexionMQTT();
 
+    // Atender mensajes recibidos por MQTT
     if (mqttClient.connected())
     {
         mqttClient.loop();
