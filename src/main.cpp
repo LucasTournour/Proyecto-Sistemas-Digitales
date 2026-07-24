@@ -2,13 +2,14 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <DHT.h>
+#include <PubSubClient.h>
 // ------------------------------------------------------------
 // CONFIGURACIÓN DE WIFI
 // ------------------------------------------------------------
 
 // Reemplazar por el nombre y contraseña de tu red WiFi
-const char *ssid = "Personal-985-2.4GHz";
-const char *password = "F7C0F5F985";
+const char *WIFI_SSID = "Personal-985-2.4GHz";
+const char *WIFI_PASSWORD = "F7C0F5F985";
 
 // ============================================================
 // CONFIGURACIÓN MQTT
@@ -16,7 +17,7 @@ const char *password = "F7C0F5F985";
 
 // Colocar la dirección IPv4 de la computadora donde funciona Mosquitto.
 // Para verla, ejecutar ipconfig en PowerShell.
-const char* MQTT_BROKER = "192.168.1.35";
+const char* MQTT_BROKER = "192.168.0.145";
 
 const uint16_t MQTT_PORT = 1883;
 
