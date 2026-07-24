@@ -253,39 +253,27 @@ void leerSensor()
 
     tiempoUltimaLectura = tiempoActual;
 
-    float nuevaTemperatura = dht.readTemperature();
-    float nuevaHumedad = dht.readHumidity();
+    float temperatura = dht.readTemperature();
+float humedad = dht.readHumidity();
 
-    if (
-        isnan(nuevaTemperatura) ||
-        isnan(nuevaHumedad)
-    )
-    {
-        sensorValido = false;
+if (!isnan(temperatura) && !isnan(humedad))
+{
+    String tempTexto = String(temperatura, 1);
+    String humTexto = String(humedad, 1);
 
-        Serial.println("Error al leer el sensor DHT22");
+    client.publish("proyecto/temperatura", tempTexto.c_str());
+    client.publish("proyecto/humedad", humTexto.c_str());
 
-        return;
-    }
-
-    temperatura = nuevaTemperatura;
-    humedad = nuevaHumedad;
-    sensorValido = true;
-
-    Serial.println();
     Serial.print("Temperatura: ");
-    Serial.print(temperatura, 1);
-    Serial.println(" °C");
-
-    Serial.print("Humedad: ");
-    Serial.print(humedad, 1);
+    Serial.print(temperatura);
+    Serial.print(" °C | Humedad: ");
+    Serial.print(humedad);
     Serial.println(" %");
-
-    Serial.print("Límite: ");
-    Serial.print(temperaturaMaxima, 1);
-    Serial.println(" °C");
 }
-
+else
+{
+    Serial.println("Error al leer el DHT22");
+}
 // ============================================================
 // CONTROL DE LA ALARMA
 // ============================================================
