@@ -8,15 +8,15 @@
 // ------------------------------------------------------------
 
 // Reemplazar por el nombre y contraseña de tu red WiFi
-const char *WIFI_SSID = "Personal-985-2.4GHz";
-const char *WIFI_PASSWORD = "F7C0F5F985";
+const char *WIFI_SSID = "TP-Link_8812";
+const char *WIFI_PASSWORD = "41880586";
 
 // ============================================================
 // CONFIGURACIÓN MQTT
 // ============================================================
 
-// Dirección IPv4 de la computadora donde funciona Mosquitto
-const char* MQTT_BROKER = "192.168.0.145";
+// Dirección IPv4 pública del servidor Oracle donde funciona Mosquitto
+const char* mqtt_server = "161.153.217.107";
 const uint16_t MQTT_PORT = 1883;
 
 // Tópicos MQTT
@@ -99,7 +99,7 @@ void conectarWiFi()
     Serial.println(WiFi.localIP());
 
     Serial.print("IP del broker MQTT: ");
-    Serial.println(MQTT_BROKER);
+    Serial.println(mqtt_server);
 }
 
 // ============================================================
@@ -154,7 +154,7 @@ void recibirMensajeMQTT(
 bool conectarMQTT()
 {
     Serial.print("Conectando con Mosquitto en ");
-    Serial.print(MQTT_BROKER);
+    Serial.print(mqtt_server);
     Serial.print(":");
     Serial.print(MQTT_PORT);
     Serial.print("... ");
@@ -421,7 +421,7 @@ void setup()
     conectarWiFi();
 
     mqttClient.setServer(
-        MQTT_BROKER,
+        mqtt_server,
         MQTT_PORT
     );
 
