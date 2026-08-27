@@ -8,8 +8,8 @@
 // ------------------------------------------------------------
 
 // Reemplazar por el nombre y contraseña de tu red WiFi
-const char *WIFI_SSID = "TP-Link_8812";
-const char *WIFI_PASSWORD = "41880586";
+const char *WIFI_SSID = "Personal-985-2.4GHz";
+const char *WIFI_PASSWORD = "F7C0F5F985";
 
 // ============================================================
 // CONFIGURACIÓN MQTT
@@ -45,21 +45,21 @@ const uint8_t LED_ALARMA = 2;
 // OBJETOS WIFI Y MQTT
 // ============================================================
 
-WiFiClient wifiClient;
-PubSubClient mqttClient(wifiClient);
+WiFiClient wifiClient; //crea comunicacion TCP mediante wifi
+PubSubClient mqttClient(wifiClient); //crea el cliente MQTT utilizando esa comunicacion
 
 // ============================================================
 // VARIABLES DEL SISTEMA
 // ============================================================
 
-float temperatura = 0.0;
+float temperatura = 0.0;// float permite guardar numeros con decimales
 float humedad = 0.0;
 
 // Límite inicial de temperatura
 float temperaturaMaxima = 30.0;
 
-bool alarmaActiva = false;
-bool sensorValido = false;
+bool alarmaActiva = false; // solo puede ser falso o verdadero
+bool sensorValido = false; // verdadero DHT22 respondio correctamente falso error de lectura
 
 // Tiempo entre lecturas del DHT22
 const unsigned long INTERVALO_LECTURA = 2000;
@@ -84,7 +84,7 @@ void conectarWiFi()
     Serial.println(WIFI_SSID);
 
     WiFi.mode(WIFI_STA);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);//comienza lo coneccion wifi
 
     while (WiFi.status() != WL_CONNECTED)
     {
@@ -96,7 +96,7 @@ void conectarWiFi()
     Serial.println("WiFi conectado correctamente");
 
     Serial.print("IP del ESP32: ");
-    Serial.println(WiFi.localIP());
+    Serial.println(WiFi.localIP());// IP que asigno al ESP32
 
     Serial.print("IP del broker MQTT: ");
     Serial.println(mqtt_server);
@@ -107,9 +107,9 @@ void conectarWiFi()
 // ============================================================
 
 void recibirMensajeMQTT(
-    char* topic,
-    byte* payload,
-    unsigned int length
+    char* topic,// topico donde llego 
+    byte* payload,//contenido 
+    unsigned int length//cantidad de bytes
 )
 {
     String mensaje = "";
@@ -128,11 +128,11 @@ void recibirMensajeMQTT(
     Serial.println(mensaje);
 
     // Recibir el límite enviado desde Node-RED
-    if (String(topic) == TOPIC_LIMITE)
+    if (String(topic) == TOPIC_LIMITE)// el mensaje vino por proyecto limite?
     {
-        float nuevoLimite = mensaje.toFloat();
+        float nuevoLimite = mensaje.toFloat(); //convierte el texto recibido a munero decimal
 
-        if (nuevoLimite >= -20.0 && nuevoLimite <= 80.0)
+        if (nuevoLimite >= 0 && nuevoLimite <= 100)
         {
             temperaturaMaxima = nuevoLimite;
 
@@ -157,30 +157,30 @@ bool conectarMQTT()
     Serial.print(mqtt_server);
     Serial.print(":");
     Serial.print(MQTT_PORT);
-    Serial.print("... ");
+    Serial.print("... ");             //Conectando con Mosquitto en IP:1883...
 
     // Identificador único para este ESP32
-    String identificador = "ESP32-DHT22-";
+    String identificador = "ESP32-DHT22-"; //obtiene un identificador propio de ESP32
 
     identificador += String(
-        static_cast<uint32_t>(ESP.getEfuseMac()),
+        static_cast<uint32_t>(ESP.getEfuseMac()),// convierte el numero entero en texto hexadecimal
         HEX
     );
+// este sera el Client ID de MQTT, que debe ser unico para cada cliente que se conecte al broker
+    
+    // Última voluntad MQTT:
+    // si el ESP32 pierde conexión inesperadamente,
+    // Mosquitto publica "desconectado".
 
-    /*
-     * Última voluntad MQTT:
-     * si el ESP32 pierde conexión inesperadamente,
-     * Mosquitto publica "desconectado".
-     */
     bool conectado = mqttClient.connect(
         identificador.c_str(),
         TOPIC_ESTADO,
-        0,
+        0,// QoS 0 enviar una vez sin cofirmacion de entrega
         true,
         "desconectado"
     );
 
-    if (conectado)
+    if (conectado) // si es verdadero puede ver y publicar cambios
     {
         Serial.println("conectado");
 
@@ -191,14 +191,14 @@ bool conectarMQTT()
         mqttClient.publish(
             TOPIC_ESTADO,
             "conectado",
-            true
+            true            //guarda e indica coneccion correcta
         );
 
         return true;
     }
 
     Serial.print("falló. Código de error: ");
-    Serial.println(mqttClient.state());
+    Serial.println(mqttClient.state());// devuelve el error de coneccion MQTT
 
     return false;
 }
@@ -209,7 +209,7 @@ bool conectarMQTT()
 
 void controlarConexionMQTT()
 {
-    if (mqttClient.connected())
+    if (mqttClient.connected()) //pregunta MQTT esta conectado?
     {
         return;
     }
@@ -217,7 +217,7 @@ void controlarConexionMQTT()
     unsigned long tiempoActual = millis();
 
     if (
-        tiempoActual - tiempoUltimoIntentoMQTT
+        tiempoActual - tiempoUltimoIntentoMQTT // pregunta si pasaron al menos 3 segundos 
         >= INTERVALO_RECONEXION
     )
     {
@@ -245,7 +245,7 @@ void leerSensor()
     tiempoUltimaLectura = tiempoActual;
 
     // Las lecturas se guardan en las variables globales
-    temperatura = dht.readTemperature();
+    temperatura = dht.readTemperature();  
     humedad = dht.readHumidity();
 
     if (!isnan(temperatura) && !isnan(humedad))
@@ -333,11 +333,11 @@ void publicarDatosMQTT()
     char textoHumedad[16];
     char textoLimite[16];
 
-    snprintf(
-        textoTemperatura,
-        sizeof(textoTemperatura),
-        "%.1f",
-        temperatura
+    snprintf(                    //escribe texto formateado dentro de un buffer
+        textoTemperatura,        //guarda el resultado
+        sizeof(textoTemperatura),//indica cuanto espacio tiene disponible el buffer
+        "%.1f",                  //formato de salida, 1 decimal
+        temperatura                  
     );
 
     snprintf(
@@ -416,11 +416,11 @@ void setup()
     pinMode(LED_ALARMA, OUTPUT);
     digitalWrite(LED_ALARMA, LOW);
 
-    dht.begin();
+    dht.begin(); //inicializa el sensor DHT22 
 
     conectarWiFi();
 
-    mqttClient.setServer(
+    mqttClient.setServer( //indica IP y puerto del broker MQTT
         mqtt_server,
         MQTT_PORT
     );
