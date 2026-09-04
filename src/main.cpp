@@ -10,10 +10,14 @@ namespace {
 constexpr char MQTT_SERVER[] = "161.153.217.107";
 constexpr uint16_t MQTT_PORT = 1883;
 
+// Cambia estos dos valores cada vez que uses el equipo en otra red.
+constexpr char WIFI_SSID[] = "Profesores";
+constexpr char WIFI_PASSWORD[] = "Profe2016";
+
 constexpr uint8_t DHT_PIN = 4;
 constexpr uint8_t LED_ALARMA = 2;
 
-ConexionWiFi conexionWiFi("ESP32-Configuracion");
+ConexionWiFi conexionWiFi(WIFI_SSID, WIFI_PASSWORD);
 ComunicacionMQTT comunicacionMqtt(MQTT_SERVER, MQTT_PORT);
 SensorAmbiente sensor(DHT_PIN, DHT22);
 AlarmaTemperatura alarma(LED_ALARMA, 30.0F);
